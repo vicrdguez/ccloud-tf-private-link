@@ -29,9 +29,8 @@ provider "confluent" {
 }
 
 # The Confluent network for the Private Link connection
-
 resource "confluent_network" "pl-network" {
-  display_name     = "ahb-pl-net"
+  display_name     = "pl-net"
   cloud            = "AZURE"
   region           = var.location
   connection_types = ["PRIVATELINK"]
@@ -57,7 +56,7 @@ resource "confluent_network" "pl-network" {
 
 # Needed Private Link request for access 
 resource "confluent_private_link_access" "pl-access" {
-  display_name = "Azure Private Link Access to AHB subscription"
+  display_name = "Azure Private Link Access"
   azure {
     subscription = var.subscription_id
   }
