@@ -71,7 +71,7 @@ resource "confluent_private_link_access" "pl-access" {
 
 # The dedicated kafka cluster with Private Link
 resource "confluent_kafka_cluster" "dedicated-pl" {
-  display_name = "ahb-pl-dedicated"
+  display_name = "pl-dedicated"
   availability = var.ccloud_cluster_availability
   cloud        = local.cloud
   region       = var.location
