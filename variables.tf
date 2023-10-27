@@ -68,3 +68,8 @@ variable "tenant_id" {
   description = "The Azure tenant ID in which Subscription exists"
   type        = string
 }
+
+variable "key_vault_id" {
+  description = "Azure Key Vault ID used for byok"
+  type = string
+}

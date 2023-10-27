@@ -4,6 +4,10 @@ terraform {
       source  = "hashicorp/azurerm"
       version = "3.72.0"
     }
+    azuread = {
+      source  = "hashicorp/azuread"
+      version = "~> 2.15.0"
+    }
     confluent = {
       source  = "confluentinc/confluent"
       version = "1.51.0"
@@ -31,7 +35,7 @@ provider "confluent" {
 # The Confluent network for the Private Link connection
 resource "confluent_network" "pl-network" {
   display_name     = "pl-net"
-  cloud            = "AZURE"
+  cloud            = local.cloud
   region           = var.location
   connection_types = ["PRIVATELINK"]
   environment {
@@ -49,9 +53,9 @@ resource "confluent_network" "pl-network" {
   # created, and so this option should be used sparingly or removed if there is a desire to 
   # destroy the deployment
 
-  lifecycle {
-    prevent_destroy = true
-  }
+  # lifecycle {
+  #   prevent_destroy = true
+  # }
 }
 
 # Needed Private Link request for access 
@@ -85,6 +89,14 @@ resource "confluent_kafka_cluster" "dedicated-pl" {
   network {
     id = confluent_network.pl-network.id
   }
+
+  byok_key {
+    id = confluent_byok_key.byok_key.id
+  }
+  depends_on = [
+    azurerm_role_assignment.reader_role_assignment,
+    azurerm_role_assignment.encryption_user_role_assignment
+  ]
 }
 
 # Declaring local variables and comput data variables
@@ -104,6 +116,8 @@ locals {
   )
   network_id = regex("^([^.]+)[.].*", local.hosted_zone)[0]
 }
+
+# data "azurerm_client_config" "current_config" {}
 
 data "azurerm_resource_group" "rg" {
   name = var.resource_group
@@ -177,3 +191,74 @@ resource "azurerm_private_dns_a_record" "zonal-dns-record" {
     azurerm_private_endpoint.endpoint[each.key].private_service_connection[0].private_ip_address,
   ]
 }
+
+# byok
+
+resource "confluent_byok_key" "byok_key" {
+  azure {
+    tenant_id      = var.tenant_id
+    key_vault_id   = var.key_vault_id
+    key_identifier = azurerm_key_vault_key.main.versionless_id
+  }
+  depends_on = [
+      azurerm_role_assignment.administrator_assignment,
+      azurerm_key_vault_key.main
+  ]
+}
+## Current service principal used for the deployment
+data "azuread_service_principal" "current_sp" {
+  application_id = var.client_id
+}
+#
+## Give current service principal admin rights for Key Vault to perform following actions
+## Configured client_id in the provider needs to have enough priviledges to grant this role, (e.g. 
+## having the Contributor role) otherwise this resource will fail
+resource "azurerm_role_assignment" "administrator_assignment" {
+  scope                = var.key_vault_id
+  role_definition_name = "Key Vault Administrator"
+  principal_id = data.azuread_service_principal.current_sp.id
+}
+
+# Create an Azure Key for confluent byok
+resource "azurerm_key_vault_key" "main" {
+  name         = "confluent-byok-key"
+  key_vault_id = var.key_vault_id
+  key_type     = "RSA"
+  key_size     = 2048
+  # Needed Key operations for byok to work
+  key_opts = [
+    "decrypt",
+    "encrypt",
+    "sign",
+    "unwrapKey",
+    "verify",
+    "wrapKey",
+  ]
+
+  depends_on = [azurerm_role_assignment.administrator_assignment]
+}
+
+# Create service principal referencing the application ID returned by the confluent cloud key
+resource "azuread_service_principal" "main" {
+  application_id               = confluent_byok_key.byok_key.azure[0].application_id
+  app_role_assignment_required = false
+  owners                       = [data.azuread_service_principal.current_sp.object_id]
+}
+
+# Create role assignments to the service principal to allow Confluent access to the keyvault
+resource "azurerm_role_assignment" "reader_role_assignment" {
+  scope                = confluent_byok_key.byok_key.azure[0].key_vault_id
+  role_definition_name = "Key Vault Reader"
+  principal_id         = azuread_service_principal.main.object_id
+}
+
+resource "azurerm_role_assignment" "encryption_user_role_assignment" {
+  scope                = confluent_byok_key.byok_key.azure[0].key_vault_id
+  role_definition_name = "Key Vault Crypto Service Encryption User"
+  principal_id         = azuread_service_principal.main.object_id
+}
+
+
+
+
+#
